@@ -6,7 +6,9 @@ export interface SapCustomer {
 }
 
 export async function getSapCustomers(companyId: number): Promise<SapCustomer[]> {
-  const response = await api.get('/api/v1/sap/customers', { params: { companyId } });
+  // El backend intenta SAP B1 primero (timeout interno de 10s) y si falla cae a los
+  // clientes de backup — le damos margen al request para que ese fallback llegue a responder.
+  const response = await api.get('/api/v1/sap/customers', { params: { companyId }, timeout: 15000 });
   return response.data.data;
 }
 

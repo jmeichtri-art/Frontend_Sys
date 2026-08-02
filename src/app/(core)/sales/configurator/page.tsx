@@ -106,6 +106,7 @@ export default function ConfiguratorPage() {
         option_description: opt.description,
         mrkwrt: opt.mrkwrt,
         required: true,
+        component_category_id: group.char.componentCategoryId ?? null,
       });
     }
 
@@ -120,6 +121,7 @@ export default function ConfiguratorPage() {
         option_description: opt.description,
         mrkwrt: opt.mrkwrt,
         required: false,
+        component_category_id: group.char.componentCategoryId ?? null,
       });
     }
 

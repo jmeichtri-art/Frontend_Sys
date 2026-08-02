@@ -10,6 +10,7 @@ export interface Characteristic {
   machineId: number;
   merkm: string;
   name: string;
+  componentCategoryId?: number | null;
 }
 
 export interface Option {

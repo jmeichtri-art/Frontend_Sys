@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, ShoppingCart, Settings, FileText,
   ChevronLeft, ChevronRight, LogOut, Forklift, ChevronDown, ChevronUp, BookMarked,
-  Cog, Users, Building2, Tag, Package, FileUp, Boxes,
+  Cog, Users, Building2, Tag, Package, FileUp, Boxes, Percent,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth/AuthContext';
 import { cn } from '@/lib/utils';
@@ -35,8 +35,9 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Inventario',
     icon: <Package size={18} />,
     children: [
-      { label: 'Ítems',            href: '/inventory/items',  icon: <Boxes size={18} />  },
-      { label: 'Importar Equipos', href: '/inventory/import', icon: <FileUp size={18} /> },
+      { label: 'Ítems',            href: '/inventory/items',     icon: <Boxes size={18} />   },
+      { label: 'Descuentos',       href: '/inventory/discounts', icon: <Percent size={18} /> },
+      { label: 'Importar Equipos', href: '/inventory/import',    icon: <FileUp size={18} />  },
     ],
   },
   {

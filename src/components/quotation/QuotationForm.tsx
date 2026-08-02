@@ -10,11 +10,15 @@ import { SapCustomer } from '@/services/sap.service';
 import { createQuotation, updateQuotationLines } from '@/services/quotation.service';
 import { getPriceLists, getPriceListPrices } from '@/services/price-list.service';
 import { getItems } from '@/services/item.service';
+import { resolveDiscount } from '@/services/discount.service';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { SapCustomerCombobox } from '@/components/ui/SapCustomerCombobox';
+
+// SAP convention: merkm '1100' holds the model variant options
+const MODEL_VARIANT_MERKM = '1100';
 
 interface FormLine {
   characteristic_id: number;
@@ -23,6 +27,8 @@ interface FormLine {
   option_description: string;
   mrkwrt: string;
   required?: boolean;
+  merkm?: string;
+  component_category_id?: number | null;
 }
 
 interface ItemFormLine {
@@ -67,6 +73,7 @@ export function QuotationForm(props: QuotationFormProps) {
         option_id:           l.option_id!,
         option_description:  l.option_description ?? '',
         mrkwrt:              l.mrkwrt ?? '',
+        merkm:               l.merkm ?? undefined,
       }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -86,7 +93,13 @@ export function QuotationForm(props: QuotationFormProps) {
   const [prices,              setPrices]              = useState<Map<number, PriceListOptionPrice>>(initialPrices);
   const [fetchingPrices,      setFetchingPrices]      = useState(false);
   const [lineExtras,          setLineExtras]          = useState<LineDiscount[]>(lines.map(() => ({ discount: 0 })));
+  const [touchedLines,        setTouchedLines]        = useState<Set<number>>(new Set());
   const [orderDiscountPct,    setOrderDiscountPct]    = useState(0);
+
+  // The model-variant line (merkm === '1100') carries the option that discount rules key off of
+  const modelOptionId = useMemo(
+    () => lines.find((l) => l.merkm === MODEL_VARIANT_MERKM)?.option_id ?? null,
+  [lines]);
 
   const [itemLines,       setItemLines]       = useState<ItemFormLine[]>(() => {
     if (isCreate) return [];
@@ -126,13 +139,51 @@ export function QuotationForm(props: QuotationFormProps) {
     else setPrices(initialPrices);
   }
 
+  const hasPriceList = !!selectedPriceListId || (!isCreate && prices.size > 0);
+
   function setLineDiscount(idx: number, raw: string) {
     const value = raw === '' ? 0 : Number(raw);
     if (isNaN(value)) return;
+    setTouchedLines((prev) => new Set(prev).add(idx));
     setLineExtras((prev) => prev.map((e, i) =>
       i !== idx ? e : { discount: Math.min(100, Math.max(0, value)) }
     ));
   }
+
+  // Prefill each line's discount from the company's suggested discount rules once prices are
+  // available — never overwrites a discount the user already edited (touchedLines).
+  useEffect(() => {
+    if (!hasPriceList || !modelOptionId) return;
+    const categoryIds = Array.from(new Set(
+      lines
+        .map((l) => (prices.get(l.option_id)?.unit_price != null ? l.component_category_id ?? null : undefined))
+        .filter((v): v is number | null => v !== undefined)
+    ));
+    if (categoryIds.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const resolved = new Map<number | null, number | null>();
+      await Promise.all(categoryIds.map(async (catId) => {
+        try {
+          const res = await resolveDiscount(companyId, modelOptionId, catId ?? undefined);
+          resolved.set(catId, res.discount_pct);
+        } catch {
+          resolved.set(catId, null);
+        }
+      }));
+      if (cancelled) return;
+      setLineExtras((prev) => prev.map((extra, idx) => {
+        if (touchedLines.has(idx)) return extra;
+        const line = lines[idx];
+        if (prices.get(line.option_id)?.unit_price == null) return extra;
+        const pct = resolved.get(line.component_category_id ?? null);
+        return pct != null ? { discount: pct } : extra;
+      }));
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prices, hasPriceList, modelOptionId, companyId]);
 
   function subtotalOf(optionId: number, idx: number): number | null {
     const p = prices.get(optionId);
@@ -268,8 +319,6 @@ export function QuotationForm(props: QuotationFormProps) {
       setError(err instanceof Error ? err.message : 'No se pudo guardar la cotización.');
     } finally { setSubmitting(false); }
   }
-
-  const hasPriceList = !!selectedPriceListId || (!isCreate && prices.size > 0);
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -552,7 +601,7 @@ export function QuotationForm(props: QuotationFormProps) {
                   <th className="text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Nombre</th>
                   <th className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2 w-16">Cant.</th>
                   <th className="text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Precio unit.</th>
-                  <th className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2 w-24">Desc. %</th>
+                  <th className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2 w-28">Desc. %</th>
                   <th className="text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Subtotal</th>
                   <th className="px-3 py-2"><span className="sr-only">Eliminar</span></th>
                 </tr>
@@ -599,7 +648,7 @@ export function QuotationForm(props: QuotationFormProps) {
                           value={line.discount}
                           onChange={(e) => setItemDiscount(idx, e.target.value)}
                           disabled={line.unit_price == null}
-                          className="w-16 h-7 px-2 text-xs text-center rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-35 disabled:cursor-not-allowed tabular-nums"
+                          className="w-20 h-7 px-2 text-xs text-center rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-35 disabled:cursor-not-allowed tabular-nums"
                         />
                       </td>
                       <td className="px-4 py-2 text-right whitespace-nowrap">
@@ -643,7 +692,7 @@ export function QuotationForm(props: QuotationFormProps) {
                 {hasPriceList && (
                   <>
                     <th className="text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2.5">Precio Unit.</th>
-                    <th className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2.5 w-24">Desc. %</th>
+                    <th className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2.5 w-28">Desc. %</th>
                     <th className="text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2.5">Subtotal</th>
                   </>
                 )}
@@ -692,7 +741,7 @@ export function QuotationForm(props: QuotationFormProps) {
                             value={extra.discount}
                             onChange={(e) => setLineDiscount(idx, e.target.value)}
                             disabled={!hasPrice}
-                            className="w-16 h-7 px-2 text-xs text-center rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-35 disabled:cursor-not-allowed tabular-nums"
+                            className="w-20 h-7 px-2 text-xs text-center rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-35 disabled:cursor-not-allowed tabular-nums"
                           />
                         </td>
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">

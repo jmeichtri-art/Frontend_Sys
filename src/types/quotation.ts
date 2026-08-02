@@ -22,6 +22,7 @@ export interface QuotationDraftLine {
   option_description: string;
   mrkwrt: string;
   required?: boolean;
+  component_category_id?: number | null;
 }
 
 export interface QuotationDraft {
