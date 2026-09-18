@@ -21,6 +21,10 @@ export async function updateQuotationLines(id: number, payload: UpdateQuotationL
   return response.data.data;
 }
 
+export async function deleteQuotation(id: number): Promise<void> {
+  await api.delete(`/api/v1/quotations/${id}`);
+}
+
 export async function syncQuotationToSap(id: number): Promise<SyncQuotationResult> {
   const response = await api.post(`/api/v1/sync/quotations/${id}`);
   return response.data.data;

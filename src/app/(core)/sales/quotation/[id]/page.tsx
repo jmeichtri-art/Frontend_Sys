@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, User, Calendar, Forklift, AlertCircle, Loader2, FileText, Pencil, Send } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, User, Calendar, Forklift, AlertCircle, Loader2, FileText, Pencil, Send, Trash2, Check } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import {
@@ -13,15 +14,17 @@ import {
   SYNC_STATUS_LABEL_MAP,
 } from '@/components/ui/Badge';
 import { formatDate } from '@/lib/utils';
-import { getQuotationById, syncQuotationToSap } from '@/services/quotation.service';
+import { getQuotationById, deleteQuotation, syncQuotationToSap } from '@/services/quotation.service';
 import { QuotationApiItem } from '@/types/quotation';
 import { QuotationForm } from '@/components/quotation/QuotationForm';
 import { useAuth } from '@/lib/auth/AuthContext';
 
 export default function CotizacionDetailPage({ params }: { params: { id: string } }) {
   const { id } = params;
+  const router = useRouter();
   const { user } = useAuth();
   const canSend = user?.role === 'admin' || user?.role === 'sales';
+  const isAdmin = user?.role === 'admin';
 
   const [quotation, setQuotation] = useState<QuotationApiItem | null>(null);
   const [loading,   setLoading]   = useState(true);
@@ -30,6 +33,10 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
 
   const [syncing,   setSyncing]   = useState(false);
   const [syncError, setSyncError] = useState('');
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting,      setDeleting]      = useState(false);
+  const [deleteError,   setDeleteError]   = useState('');
 
   useEffect(() => {
     const numId = Number(id);
@@ -52,6 +59,19 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
       setSyncError(err instanceof Error ? err.message : 'No se pudo sincronizar la cotización con SAP.');
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!quotation) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await deleteQuotation(quotation.id);
+      router.push('/sales/quotation');
+    } catch (err: unknown) {
+      setDeleteError(err instanceof Error ? err.message : 'No se pudo eliminar la cotización.');
+      setDeleting(false);
     }
   }
 
@@ -243,11 +263,32 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
           <AlertCircle size={14} /> {syncError}
         </div>
       )}
+      {deleteError && (
+        <div className="flex items-center gap-2 text-destructive bg-destructive/10 px-3 py-2 rounded-lg text-sm">
+          <AlertCircle size={14} /> {deleteError}
+        </div>
+      )}
 
       <div className="flex gap-3 justify-end pb-6">
-        <Button variant="secondary">Exportar PDF</Button>
-        <Button variant="outline">Duplicar</Button>
-        {canSend && quotation.sync_status !== 'synced' && (
+        {isAdmin && !confirmDelete && (
+          <Button variant="outline" onClick={() => setConfirmDelete(true)}>
+            <Trash2 size={15} /> Eliminar
+          </Button>
+        )}
+        {confirmDelete && (
+          <>
+            <span className="text-xs text-muted-foreground self-center mr-1">¿Eliminar cotización?</span>
+            <Button variant="destructive" loading={deleting} onClick={handleDelete}>
+              <Check size={15} /> Sí, eliminar
+            </Button>
+            <Button variant="secondary" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+              No
+            </Button>
+          </>
+        )}
+        {!confirmDelete && <Button variant="secondary">Exportar PDF</Button>}
+        {!confirmDelete && <Button variant="outline">Duplicar</Button>}
+        {canSend && quotation.sync_status !== 'synced' && !confirmDelete && (
           <Button onClick={handleSync} loading={syncing}>
             <Send size={15} />
             {quotation.sync_status === 'error' ? 'Reintentar sincronización' : 'Enviar cotización'}
