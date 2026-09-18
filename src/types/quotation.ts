@@ -103,6 +103,11 @@ export interface QuotationApiLine {
   currency_symbol: string | null;
 }
 
+export interface SyncQuotationResult {
+  docentry: number;
+  sap_response: unknown;
+}
+
 export interface QuotationApiItem {
   id: number;
   company_id: number;

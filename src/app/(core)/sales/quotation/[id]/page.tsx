@@ -2,21 +2,34 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, User, Calendar, Forklift, AlertCircle, Loader2, FileText, Pencil } from 'lucide-react';
+import { ArrowLeft, User, Calendar, Forklift, AlertCircle, Loader2, FileText, Pencil, Send } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Badge, QUOTATION_STATUS_VARIANT_MAP, QUOTATION_STATUS_LABEL_MAP } from '@/components/ui/Badge';
+import {
+  Badge,
+  QUOTATION_STATUS_VARIANT_MAP,
+  QUOTATION_STATUS_LABEL_MAP,
+  SYNC_STATUS_VARIANT_MAP,
+  SYNC_STATUS_LABEL_MAP,
+} from '@/components/ui/Badge';
 import { formatDate } from '@/lib/utils';
-import { getQuotationById } from '@/services/quotation.service';
+import { getQuotationById, syncQuotationToSap } from '@/services/quotation.service';
 import { QuotationApiItem } from '@/types/quotation';
 import { QuotationForm } from '@/components/quotation/QuotationForm';
+import { useAuth } from '@/lib/auth/AuthContext';
 
 export default function CotizacionDetailPage({ params }: { params: { id: string } }) {
   const { id } = params;
+  const { user } = useAuth();
+  const canSend = user?.role === 'admin' || user?.role === 'sales';
+
   const [quotation, setQuotation] = useState<QuotationApiItem | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState('');
   const [editMode,  setEditMode]  = useState(false);
+
+  const [syncing,   setSyncing]   = useState(false);
+  const [syncError, setSyncError] = useState('');
 
   useEffect(() => {
     const numId = Number(id);
@@ -26,6 +39,21 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
       .catch((err) => setError(err.message ?? 'No se pudo cargar la cotización.'))
       .finally(() => setLoading(false));
   }, [id]);
+
+  async function handleSync() {
+    if (!quotation) return;
+    setSyncing(true);
+    setSyncError('');
+    try {
+      await syncQuotationToSap(quotation.id);
+      const updated = await getQuotationById(quotation.id);
+      setQuotation(updated);
+    } catch (err: unknown) {
+      setSyncError(err instanceof Error ? err.message : 'No se pudo sincronizar la cotización con SAP.');
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -75,6 +103,9 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
                 <span className="font-mono text-muted-foreground text-sm">#{quotation.id}</span>
                 <Badge variant={QUOTATION_STATUS_VARIANT_MAP[quotation.status]} dot>
                   {QUOTATION_STATUS_LABEL_MAP[quotation.status]}
+                </Badge>
+                <Badge variant={SYNC_STATUS_VARIANT_MAP[quotation.sync_status]} dot>
+                  {SYNC_STATUS_LABEL_MAP[quotation.sync_status]}
                 </Badge>
                 {quotation.sync_status === 'synced' && quotation.docentry && (
                   <span className="text-xs text-muted-foreground">SAP #{quotation.docentry}</span>
@@ -207,10 +238,21 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
         )}
       </div>
 
+      {syncError && (
+        <div className="flex items-center gap-2 text-destructive bg-destructive/10 px-3 py-2 rounded-lg text-sm">
+          <AlertCircle size={14} /> {syncError}
+        </div>
+      )}
+
       <div className="flex gap-3 justify-end pb-6">
         <Button variant="secondary">Exportar PDF</Button>
         <Button variant="outline">Duplicar</Button>
-        <Button>Enviar cotización</Button>
+        {canSend && quotation.sync_status !== 'synced' && (
+          <Button onClick={handleSync} loading={syncing}>
+            <Send size={15} />
+            {quotation.sync_status === 'error' ? 'Reintentar sincronización' : 'Enviar cotización'}
+          </Button>
+        )}
       </div>
     </div>
   );

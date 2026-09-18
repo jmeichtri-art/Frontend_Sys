@@ -70,3 +70,15 @@ export const QUOTATION_STATUS_LABEL_MAP: Record<string, string> = {
   approved: 'Aprobada',
   rejected: 'Rechazada',
 };
+
+export const SYNC_STATUS_VARIANT_MAP: Record<string, VariantProps<typeof badgeVariants>['variant']> = {
+  pending: 'default',
+  synced: 'success',
+  error: 'destructive',
+};
+
+export const SYNC_STATUS_LABEL_MAP: Record<string, string> = {
+  pending: 'Sin sincronizar',
+  synced: 'Sincronizada con SAP',
+  error: 'Error de sincronización',
+};
