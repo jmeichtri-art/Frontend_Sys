@@ -39,6 +39,8 @@ type MachineLinePayload = {
   line_type: 'machine';
   characteristic_id: number;
   option_id: number;
+  /** Tilde "Mostrar Separado": true = línea propia en SAP, false = agrupado en la línea de texto */
+  send_separately?: boolean;
   unit_price?: number;
   quantity?: number;
   discount_line?: number;
@@ -49,6 +51,8 @@ type MachineLinePayload = {
 type ItemLinePayload = {
   line_type: 'item';
   item_id: number;
+  /** Tilde "Mostrar Separado": true = línea propia en SAP, false = agrupado en la línea de texto */
+  send_separately?: boolean;
   unit_price?: number;
   quantity?: number;
   discount_line?: number;
@@ -59,6 +63,19 @@ type ItemLinePayload = {
 export type QuotationLinePayload = MachineLinePayload | ItemLinePayload;
 
 export interface UpdateQuotationLinesPayload {
+  // El PUT reemplaza la cotización completa: el backend exige la cabecera, no solo las líneas
+  company_id: number;
+  cardcode: string;
+  cardname: string;
+  machine_id: number;
+  template_id?: number | null;
+  price_list_id?: number | null;
+  currency_id?: number | null;
+  doc_rate?: number | null;
+  margin_pct?: number | null;
+  valid_until: string;
+  customer_reference?: string;
+  notes?: string;
   lines: QuotationLinePayload[];
   subtotal?: number;
   discount_pct?: number;
@@ -72,6 +89,10 @@ export interface CreateQuotationPayload {
   cardname: string;
   machine_id: number;
   template_id?: number | null;
+  price_list_id?: number | null;
+  currency_id?: number | null;
+  doc_rate?: number | null;
+  margin_pct?: number | null;
   valid_until: string;
   customer_reference?: string;
   notes?: string;
@@ -96,15 +117,22 @@ export interface QuotationApiLine {
   item_id: number | null;
   item_code: string | null;
   item_name: string | null;
+  send_separately: boolean;
   // pricing
   unit_price: number | null;
   currency_id: number | null;
   currency_code: string | null;
   currency_symbol: string | null;
+  quantity: number | null;
+  discount_line: number | null;
+  discount_amount: number | null;
+  line_total: number | null;
 }
 
 export interface SyncQuotationResult {
   docentry: number;
+  /** Número visible del documento en SAP: es por el que buscan los usuarios */
+  docnum: number | null;
   sap_response: unknown;
 }
 
@@ -117,12 +145,25 @@ export interface QuotationApiItem {
   matnrk: string;
   machine_description: string;
   template_id: number | null;
+  price_list_id: number | null;
+  currency_id: number | null;
+  currency_code: string | null;
+  currency_symbol: string | null;
+  doc_rate: number | null;
+  /** Margen aplicado. Solo llega si el usuario es admin; para un vendedor viene undefined. */
+  margin_pct?: number | null;
   valid_until: string;
   status: 'draft' | 'sent' | 'approved' | 'rejected';
   sync_status: 'pending' | 'synced' | 'error';
   docentry: number | null;
+  /** Número visible del documento en SAP: es por el que buscan los usuarios */
+  docnum: number | null;
   notes: string | null;
   customer_reference: string | null;
+  subtotal: number | null;
+  discount_pct: number | null;
+  discount_amount: number | null;
+  total: number | null;
   created_by: number;
   updated_by: number;
   created_at: string;

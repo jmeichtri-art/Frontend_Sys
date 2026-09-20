@@ -1,21 +1,24 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ArrowLeft, AlertCircle, Loader2, Check, Building2, Tag, Banknote, User, Calendar, Plus, X, Boxes } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { ArrowLeft, AlertCircle, Loader2, Check, Building2, Tag, Banknote, User, Calendar, Plus, X, Boxes, TrendingUp, Settings } from 'lucide-react';
 import Link from 'next/link';
-import { QuotationDraft, QuotationApiItem, QuotationLinePayload } from '@/types/quotation';
+import { QuotationDraft, QuotationDraftLine, QuotationApiItem, QuotationLinePayload } from '@/types/quotation';
 import { PriceList, PriceListOptionPrice } from '@/types/price-list';
 import { Item } from '@/types/item';
-import { SapCustomer } from '@/services/sap.service';
+import { Currency } from '@/types/currency';
+import { SapCustomer, getSapCurrencyRate } from '@/services/sap.service';
 import { createQuotation, updateQuotationLines } from '@/services/quotation.service';
 import { getPriceLists, getPriceListPrices } from '@/services/price-list.service';
 import { getItems } from '@/services/item.service';
+import { getCurrencies } from '@/services/currency.service';
 import { resolveDiscount } from '@/services/discount.service';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { SapCustomerCombobox } from '@/components/ui/SapCustomerCombobox';
+import { useAuth } from '@/lib/auth/AuthContext';
 
 // SAP convention: merkm '1100' holds the model variant options
 const MODEL_VARIANT_MERKM = '1100';
@@ -38,13 +41,24 @@ interface ItemFormLine {
   quantity: number;
   unit_price: number | null;
   discount: number;
+  send_separately: boolean;
 }
 
-interface LineDiscount { discount: number; }
+interface LineExtra {
+  discount: number;
+  send_separately: boolean;
+}
 
 type QuotationFormProps =
   | { mode: 'create'; draft: QuotationDraft; onSuccess: (id: number) => void }
-  | { mode: 'edit'; quotation: QuotationApiItem; onSaved: (updated: QuotationApiItem) => void; onCancel: () => void };
+  | {
+      mode: 'edit';
+      quotation: QuotationApiItem;
+      /** Configuración rearmada en el asistente: reemplaza las líneas de máquina guardadas. */
+      reconfiguredLines?: QuotationDraftLine[];
+      onSaved: (updated: QuotationApiItem) => void;
+      onCancel: () => void;
+    };
 
 function buildInitialPrices(quotation: QuotationApiItem): Map<number, PriceListOptionPrice> {
   return new Map(
@@ -62,9 +76,14 @@ function buildInitialPrices(quotation: QuotationApiItem): Map<number, PriceListO
 export function QuotationForm(props: QuotationFormProps) {
   const isCreate = props.mode === 'create';
   const companyId = isCreate ? props.draft.company_id : props.quotation.company_id;
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
+  const reconfiguredLines = isCreate ? undefined : props.reconfiguredLines;
 
   const lines = useMemo<FormLine[]>(() => {
     if (isCreate) return props.draft.lines;
+    if (reconfiguredLines?.length) return reconfiguredLines;
     return (props.quotation.lines ?? [])
       .filter((l) => (l.line_type ?? 'machine') === 'machine')
       .map((l) => ({
@@ -83,18 +102,57 @@ export function QuotationForm(props: QuotationFormProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   []);
 
+  const initialLineExtras = useMemo<LineExtra[]>(() => {
+    if (isCreate) return props.draft.lines.map(() => ({ discount: 0, send_separately: false }));
+
+    const savedByCharacteristic = new Map(
+      ((props.quotation as QuotationApiItem).lines ?? [])
+        .filter((l) => (l.line_type ?? 'machine') === 'machine')
+        .map((l) => [Number(l.characteristic_id), l]),
+    );
+
+    // Tras reconfigurar, cada característica que sobrevive conserva su descuento; las
+    // nuevas arrancan en cero y quedan "sin tocar" para que las prellene la sugerencia.
+    return lines.map((line) => {
+      const saved = savedByCharacteristic.get(Number(line.characteristic_id));
+      return {
+        discount: Number(saved?.discount_line ?? 0),
+        send_separately: saved?.send_separately ?? false,
+      };
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [customer,          setCustomer]          = useState<SapCustomer | null>(null);
   const [validUntil,        setValidUntil]        = useState(!isCreate ? (props.quotation as QuotationApiItem).valid_until.slice(0, 10) : '');
   const [customerReference, setCustomerReference] = useState(!isCreate ? ((props.quotation as QuotationApiItem).customer_reference ?? '') : '');
   const [notes,             setNotes]             = useState(!isCreate ? ((props.quotation as QuotationApiItem).notes ?? '') : '');
 
   const [priceLists,          setPriceLists]          = useState<PriceList[]>([]);
-  const [selectedPriceListId, setSelectedPriceListId] = useState('');
+  const [selectedPriceListId, setSelectedPriceListId] = useState(
+    isCreate ? '' : String((props.quotation as QuotationApiItem).price_list_id ?? ''),
+  );
   const [prices,              setPrices]              = useState<Map<number, PriceListOptionPrice>>(initialPrices);
   const [fetchingPrices,      setFetchingPrices]      = useState(false);
-  const [lineExtras,          setLineExtras]          = useState<LineDiscount[]>(lines.map(() => ({ discount: 0 })));
-  const [touchedLines,        setTouchedLines]        = useState<Set<number>>(new Set());
-  const [orderDiscountPct,    setOrderDiscountPct]    = useState(0);
+  const [lineExtras,          setLineExtras]          = useState<LineExtra[]>(initialLineExtras);
+  // Al editar, las líneas ya tienen un descuento decidido: se marcan como tocadas para que
+  // la sugerencia por reglas no lo pise.
+  const [touchedLines,        setTouchedLines]        = useState<Set<number>>(() => {
+    if (isCreate) return new Set();
+    const savedCharacteristics = new Set(
+      ((props.quotation as QuotationApiItem).lines ?? [])
+        .filter((l) => (l.line_type ?? 'machine') === 'machine')
+        .map((l) => Number(l.characteristic_id)),
+    );
+    // Las características que vienen del asistente y no estaban antes quedan sin tocar,
+    // para que reciban el descuento sugerido.
+    return new Set(
+      lines.flatMap((line, idx) => savedCharacteristics.has(Number(line.characteristic_id)) ? [idx] : []),
+    );
+  });
+  const [orderDiscountPct,    setOrderDiscountPct]    = useState(
+    isCreate ? 0 : Number((props.quotation as QuotationApiItem).discount_pct ?? 0),
+  );
 
   // The model-variant line (merkm === '1100') carries the option that discount rules key off of
   const modelOptionId = useMemo(
@@ -106,16 +164,32 @@ export function QuotationForm(props: QuotationFormProps) {
     return (props.quotation as QuotationApiItem).lines
       ?.filter((l) => l.line_type === 'item')
       .map((l) => ({
-        item_id:    l.item_id!,
-        item_code:  l.item_code ?? '',
-        item_name:  l.item_name ?? '',
-        quantity:   1,
-        unit_price: l.unit_price,
-        discount:   0,
+        item_id:         l.item_id!,
+        item_code:       l.item_code ?? '',
+        item_name:       l.item_name ?? '',
+        quantity:        Number(l.quantity ?? 1),
+        unit_price:      l.unit_price,
+        discount:        Number(l.discount_line ?? 0),
+        send_separately: l.send_separately ?? false,
       })) ?? [];
   });
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
   const [addingItemId,   setAddingItemId]   = useState('');
+
+  const [currencies,         setCurrencies]         = useState<Currency[]>([]);
+  const [selectedCurrencyId, setSelectedCurrencyId] = useState(
+    isCreate ? '' : String((props.quotation as QuotationApiItem).currency_id ?? ''),
+  );
+  const [docRate,      setDocRate]      = useState(
+    isCreate ? '' : String((props.quotation as QuotationApiItem).doc_rate ?? ''),
+  );
+  const [rateInfo,     setRateInfo]     = useState('');
+  const [fetchingRate, setFetchingRate] = useState(false);
+
+  // Solo admin: el margen aplicado, editable para negociar una operación puntual
+  const [marginPct, setMarginPct] = useState(
+    isCreate ? '' : String((props.quotation as QuotationApiItem).margin_pct ?? ''),
+  );
 
   const [submitting, setSubmitting] = useState(false);
   const [error,      setError]      = useState('');
@@ -123,21 +197,82 @@ export function QuotationForm(props: QuotationFormProps) {
   useEffect(() => { getPriceLists().then(setPriceLists).catch(() => {}); }, []);
   useEffect(() => { getItems(companyId).then(setAvailableItems).catch(() => {}); }, [companyId]);
 
-  const fetchPrices = useCallback(async (priceListId: number) => {
+  useEffect(() => {
+    getCurrencies(companyId)
+      .then((list) => {
+        setCurrencies(list);
+        // En una cotización nueva arranca la moneda principal de la compañía
+        setSelectedCurrencyId((current) => current || String(list.find((c) => c.is_local)?.id ?? ''));
+      })
+      .catch(() => {});
+  }, [companyId]);
+
+  const selectedCurrency  = currencies.find((c) => String(c.id) === selectedCurrencyId) ?? null;
+  const isForeignCurrency = !!selectedCurrency && !selectedCurrency.is_local;
+
+  // El tipo de cambio solo aplica si la moneda no es la local: se trae el vigente de SAP
+  // como referencia y el vendedor lo puede pisar.
+  async function handleCurrencyChange(value: string) {
+    setSelectedCurrencyId(value);
+    setRateInfo('');
+
+    const currency = currencies.find((c) => String(c.id) === value);
+    if (!currency || currency.is_local) { setDocRate(''); return; }
+
+    setFetchingRate(true);
+    try {
+      const result = await getSapCurrencyRate(companyId, currency.code);
+      if (result.rate == null) {
+        setDocRate('');
+        setRateInfo(`SAP no tiene tipo de cambio cargado para ${currency.code}`);
+      } else {
+        setDocRate(String(result.rate));
+        const rateDate = result.rate_date?.slice(0, 10);
+        const today    = new Date().toISOString().slice(0, 10);
+        setRateInfo(rateDate && rateDate !== today ? `Último en SAP: ${rateDate}` : 'Vigente en SAP');
+      }
+    } catch {
+      setRateInfo('No se pudo consultar el tipo de cambio en SAP');
+    } finally { setFetchingRate(false); }
+  }
+
+  // Los precios vuelven con el margen ya aplicado por el backend. `margin_pct` solo llega
+  // si el usuario es admin; un vendedor nunca lo recibe.
+  const fetchPrices = useCallback(async (priceListId: number, marginOverride?: number | null) => {
     setFetchingPrices(true);
     try {
       const ids    = lines.map((l) => l.option_id);
-      const result = await getPriceListPrices(priceListId, companyId, ids);
-      setPrices(new Map(result.map((p) => [p.characteristic_option_id, p])));
+      const result = await getPriceListPrices(priceListId, companyId, ids, marginOverride);
+      setPrices(new Map(result.prices.map((p) => [p.characteristic_option_id, p])));
+      if (result.margin_pct !== undefined) setMarginPct(result.margin_pct == null ? '' : String(result.margin_pct));
     } catch { setPrices(new Map()); }
     finally { setFetchingPrices(false); }
   }, [lines, companyId]);
 
   async function handlePriceListChange(value: string) {
     setSelectedPriceListId(value);
-    if (value) await fetchPrices(Number(value));
+    if (value) await fetchPrices(Number(value), marginPct === '' ? null : Number(marginPct));
     else setPrices(initialPrices);
   }
+
+  // Un admin puede negociar el margen en una cotización puntual: al cambiarlo se
+  // recalculan los precios contra la lista seleccionada.
+  async function handleMarginChange(value: string) {
+    setMarginPct(value);
+    if (!selectedPriceListId) return;
+    const parsed = value === '' ? null : Number(value);
+    if (parsed != null && (isNaN(parsed) || parsed < 0 || parsed >= 100)) return;
+    await fetchPrices(Number(selectedPriceListId), parsed);
+  }
+
+  // Tras reconfigurar hay opciones nuevas sin precio guardado: se vuelven a pedir todos
+  // contra la lista con la que se armó la cotización.
+  const reconfiguredPricesFetched = useRef(false);
+  useEffect(() => {
+    if (!reconfiguredLines?.length || !selectedPriceListId || reconfiguredPricesFetched.current) return;
+    reconfiguredPricesFetched.current = true;
+    fetchPrices(Number(selectedPriceListId), marginPct === '' ? null : Number(marginPct));
+  }, [reconfiguredLines, selectedPriceListId, marginPct, fetchPrices]);
 
   const hasPriceList = !!selectedPriceListId || (!isCreate && prices.size > 0);
 
@@ -146,8 +281,12 @@ export function QuotationForm(props: QuotationFormProps) {
     if (isNaN(value)) return;
     setTouchedLines((prev) => new Set(prev).add(idx));
     setLineExtras((prev) => prev.map((e, i) =>
-      i !== idx ? e : { discount: Math.min(100, Math.max(0, value)) }
+      i !== idx ? e : { ...e, discount: Math.min(100, Math.max(0, value)) }
     ));
+  }
+
+  function toggleLineSeparate(idx: number, checked: boolean) {
+    setLineExtras((prev) => prev.map((e, i) => i !== idx ? e : { ...e, send_separately: checked }));
   }
 
   // Prefill each line's discount from the company's suggested discount rules once prices are
@@ -178,7 +317,7 @@ export function QuotationForm(props: QuotationFormProps) {
         const line = lines[idx];
         if (prices.get(line.option_id)?.unit_price == null) return extra;
         const pct = resolved.get(line.component_category_id ?? null);
-        return pct != null ? { discount: pct } : extra;
+        return pct != null ? { ...extra, discount: pct } : extra;
       }));
     })();
     return () => { cancelled = true; };
@@ -196,7 +335,7 @@ export function QuotationForm(props: QuotationFormProps) {
     const id = Number(addingItemId);
     const found = availableItems.find((i) => i.id === id);
     if (!found) return;
-    setItemLines((prev) => [...prev, { item_id: found.id, item_code: found.code, item_name: found.name, quantity: 1, unit_price: null, discount: 0 }]);
+    setItemLines((prev) => [...prev, { item_id: found.id, item_code: found.code, item_name: found.name, quantity: 1, unit_price: null, discount: 0, send_separately: false }]);
     setAddingItemId('');
   }
 
@@ -220,6 +359,10 @@ export function QuotationForm(props: QuotationFormProps) {
     const value = raw === '' ? 0 : Number(raw);
     if (isNaN(value)) return;
     setItemLines((prev) => prev.map((l, i) => i !== idx ? l : { ...l, discount: Math.min(100, Math.max(0, value)) }));
+  }
+
+  function toggleItemSeparate(idx: number, checked: boolean) {
+    setItemLines((prev) => prev.map((l, i) => i !== idx ? l : { ...l, send_separately: checked }));
   }
 
   const priceTotals = useMemo(() => {
@@ -252,24 +395,25 @@ export function QuotationForm(props: QuotationFormProps) {
 
   function buildLinesPayload(): QuotationLinePayload[] {
     const machineLines: QuotationLinePayload[] = lines.map((l, idx) => {
-      const p        = prices.get(l.option_id);
-      const discount = lineExtras[idx]?.discount ?? 0;
+      const p               = prices.get(l.option_id);
+      const discount        = lineExtras[idx]?.discount ?? 0;
+      const send_separately = lineExtras[idx]?.send_separately ?? false;
       if (p?.unit_price == null) {
-        return { line_type: 'machine', characteristic_id: l.characteristic_id, option_id: l.option_id, quantity: 1 };
+        return { line_type: 'machine', characteristic_id: l.characteristic_id, option_id: l.option_id, send_separately, quantity: 1 };
       }
       const unit_price      = Number(p.unit_price);
       const discount_amount = +(unit_price * (discount / 100)).toFixed(2);
       const line_total      = +(unit_price - discount_amount).toFixed(2);
-      return { line_type: 'machine', characteristic_id: l.characteristic_id, option_id: l.option_id, unit_price, quantity: 1, discount_line: discount, discount_amount, line_total };
+      return { line_type: 'machine', characteristic_id: l.characteristic_id, option_id: l.option_id, send_separately, unit_price, quantity: 1, discount_line: discount, discount_amount, line_total };
     });
 
     const extraItemLines: QuotationLinePayload[] = itemLines.map((l) => {
       if (l.unit_price == null) {
-        return { line_type: 'item', item_id: l.item_id, quantity: l.quantity };
+        return { line_type: 'item', item_id: l.item_id, quantity: l.quantity, send_separately: l.send_separately };
       }
       const discount_amount = +(l.unit_price * l.quantity * (l.discount / 100)).toFixed(2);
       const line_total      = +(l.unit_price * l.quantity - discount_amount).toFixed(2);
-      return { line_type: 'item', item_id: l.item_id, unit_price: l.unit_price, quantity: l.quantity, discount_line: l.discount, discount_amount, line_total };
+      return { line_type: 'item', item_id: l.item_id, send_separately: l.send_separately, unit_price: l.unit_price, quantity: l.quantity, discount_line: l.discount, discount_amount, line_total };
     });
 
     return [...machineLines, ...extraItemLines];
@@ -293,6 +437,12 @@ export function QuotationForm(props: QuotationFormProps) {
     setSubmitting(true); setError('');
     const linesPayload  = buildLinesPayload();
     const totalsPayload = buildTotalsPayload(linesPayload);
+    const priceListId   = selectedPriceListId ? Number(selectedPriceListId) : null;
+    const currencyId    = selectedCurrencyId ? Number(selectedCurrencyId) : null;
+    // El tipo de cambio solo tiene sentido si la moneda no es la local
+    const docRateValue  = isForeignCurrency && docRate !== '' ? Number(docRate) : null;
+    // Solo un admin edita el margen; para el resto viaja null y el backend lo ignora
+    const marginValue   = isAdmin && marginPct !== '' ? Number(marginPct) : null;
     try {
       if (isCreate) {
         const result = await createQuotation({
@@ -301,6 +451,10 @@ export function QuotationForm(props: QuotationFormProps) {
           cardname:           customer!.CardName,
           machine_id:         props.draft.machine_id,
           template_id:        props.draft.template_id ?? null,
+          price_list_id:      priceListId,
+          currency_id:        currencyId,
+          doc_rate:           docRateValue,
+          margin_pct:         marginValue,
           valid_until:        validUntil,
           customer_reference: customerReference.trim() || undefined,
           notes:              notes.trim() || undefined,
@@ -309,8 +463,21 @@ export function QuotationForm(props: QuotationFormProps) {
         });
         props.onSuccess(result.id);
       } else {
-        const updated = await updateQuotationLines((props.quotation as QuotationApiItem).id, {
-          lines: linesPayload,
+        const current = props.quotation as QuotationApiItem;
+        const updated = await updateQuotationLines(current.id, {
+          company_id:         current.company_id,
+          cardcode:           current.cardcode,
+          cardname:           current.cardname,
+          machine_id:         current.machine_id,
+          template_id:        current.template_id,
+          price_list_id:      priceListId,
+          currency_id:        currencyId,
+          doc_rate:           docRateValue,
+          margin_pct:         marginValue,
+          valid_until:        validUntil,
+          customer_reference: customerReference.trim() || undefined,
+          notes:              notes.trim() || undefined,
+          lines:              linesPayload,
           ...totalsPayload,
         });
         props.onSaved(updated);
@@ -327,7 +494,7 @@ export function QuotationForm(props: QuotationFormProps) {
       <div className="flex items-center justify-between">
         <div>
           {isCreate ? (
-            <Link href="/sales/configurator">
+            <Link href="/sales/configurator?draft=1">
               <Button variant="ghost" size="sm" className="gap-1.5 mb-1 -ml-2">
                 <ArrowLeft size={15} /> Volver al configurador
               </Button>
@@ -346,6 +513,13 @@ export function QuotationForm(props: QuotationFormProps) {
             <span className="flex items-center gap-1.5 text-destructive text-sm">
               <AlertCircle size={14} /> {error}
             </span>
+          )}
+          {isCreate && (
+            <Link href="/sales/configurator?draft=1">
+              <Button variant="outline" className="gap-1.5" title="Volver al asistente con esta configuración cargada">
+                <Settings size={16} /> Reconfigurar
+              </Button>
+            </Link>
           )}
           {isCreate ? (
             <Link href="/sales/configurator">
@@ -435,6 +609,52 @@ export function QuotationForm(props: QuotationFormProps) {
               <Input id="customerRef" placeholder="OC-4521..." value={customerReference} onChange={(e) => setCustomerReference(e.target.value)} className="h-7 text-xs" />
             </div>
             <div className="space-y-1">
+              <Label htmlFor="currency" className="flex items-center gap-1 text-[11px]">
+                <Banknote size={10} className="text-primary" /> Moneda del documento
+              </Label>
+              <select
+                id="currency"
+                title="Moneda del documento"
+                value={selectedCurrencyId}
+                onChange={(e) => handleCurrencyChange(e.target.value)}
+                disabled={currencies.length === 0}
+                className="w-full h-7 px-2 text-xs rounded-md border border-input bg-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              >
+                <option value="">
+                  {currencies.length === 0 ? 'Sin monedas configuradas' : 'Moneda de la compañía'}
+                </option>
+                {currencies.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} — {c.name}{c.is_local ? ' (local)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {isForeignCurrency && (
+              <div className="space-y-1">
+                <Label htmlFor="docRate" className="text-[11px]">
+                  Tipo de cambio {selectedCurrency && <span className="text-muted-foreground">({selectedCurrency.code})</span>}
+                </Label>
+                <div className="relative">
+                  <input
+                    id="docRate"
+                    type="number"
+                    min={0}
+                    step={0.0001}
+                    title="Tipo de cambio"
+                    placeholder="0.0000"
+                    value={docRate}
+                    onChange={(e) => setDocRate(e.target.value)}
+                    className="w-full h-7 px-2 text-xs rounded-md border border-input bg-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring tabular-nums"
+                  />
+                  {fetchingRate && (
+                    <Loader2 size={11} className="animate-spin text-muted-foreground absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  )}
+                </div>
+                {rateInfo && <p className="text-[10px] text-muted-foreground">{rateInfo}</p>}
+              </div>
+            )}
+            <div className="space-y-1">
               <Label htmlFor="priceList" className="flex items-center gap-1 text-[11px]">
                 <Tag size={10} className="text-primary" /> Lista de precios
               </Label>
@@ -480,6 +700,35 @@ export function QuotationForm(props: QuotationFormProps) {
               <Banknote size={13} className="text-primary" />
               <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Total</span>
             </div>
+            {isAdmin && (
+              <div className="space-y-1 pb-1 border-b border-border">
+                <Label htmlFor="marginPct" className="flex items-center gap-1 text-[11px]">
+                  <TrendingUp size={10} className="text-primary" /> Margen (%)
+                  <span className="ml-auto font-normal text-muted-foreground">solo admin</span>
+                </Label>
+                <div className="relative">
+                  <input
+                    id="marginPct"
+                    type="number"
+                    min={0}
+                    max={99.99}
+                    step={0.01}
+                    title="Margen de ganancia aplicado a los precios"
+                    placeholder={selectedPriceListId ? 'Sin margen' : 'Elegí una lista de precios'}
+                    value={marginPct}
+                    onChange={(e) => handleMarginChange(e.target.value)}
+                    disabled={!selectedPriceListId || fetchingPrices}
+                    className="w-full px-2 py-1 text-xs rounded-md border border-input bg-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring tabular-nums disabled:opacity-50"
+                  />
+                  {fetchingPrices && (
+                    <Loader2 size={11} className="animate-spin text-muted-foreground absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Los precios ya lo incluyen. Cambialo para negociar esta operación.
+                </p>
+              </div>
+            )}
             {hasPriceList && (
               <div className="space-y-1">
                 <Label htmlFor="orderDiscount" className="text-[11px]">Descuento general (%)</Label>
@@ -603,6 +852,12 @@ export function QuotationForm(props: QuotationFormProps) {
                   <th className="text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Precio unit.</th>
                   <th className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2 w-28">Desc. %</th>
                   <th className="text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2">Subtotal</th>
+                  <th
+                    className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2 w-32"
+                    title="Tildado: el ítem viaja como línea propia en SAP. Destildado: se agrupa en la línea de texto del documento."
+                  >
+                    Mostrar separado
+                  </th>
                   <th className="px-3 py-2"><span className="sr-only">Eliminar</span></th>
                 </tr>
               </thead>
@@ -660,6 +915,15 @@ export function QuotationForm(props: QuotationFormProps) {
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
                       </td>
+                      <td className="px-3 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          title="Mostrar separado en el documento de SAP"
+                          checked={line.send_separately}
+                          onChange={(e) => toggleItemSeparate(idx, e.target.checked)}
+                          className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                        />
+                      </td>
                       <td className="px-3 py-2">
                         <button
                           type="button"
@@ -696,12 +960,18 @@ export function QuotationForm(props: QuotationFormProps) {
                     <th className="text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2.5">Subtotal</th>
                   </>
                 )}
+                <th
+                  className="text-center text-[11px] font-semibold text-muted-foreground uppercase tracking-wide px-3 py-2.5 w-32"
+                  title="Tildado: la parte viaja como línea propia en SAP. Destildado: se agrupa en la línea de texto del documento."
+                >
+                  Mostrar separado
+                </th>
               </tr>
             </thead>
             <tbody>
               {lines.map((line, idx) => {
                 const price    = prices.get(line.option_id);
-                const extra    = lineExtras[idx] ?? { discount: 0 };
+                const extra    = lineExtras[idx] ?? { discount: 0, send_separately: false };
                 const sub      = subtotalOf(line.option_id, idx);
                 const hasPrice = hasPriceList && price?.unit_price != null;
                 return (
@@ -756,6 +1026,15 @@ export function QuotationForm(props: QuotationFormProps) {
                         </td>
                       </>
                     )}
+                    <td className="px-3 py-2.5 text-center">
+                      <input
+                        type="checkbox"
+                        title="Mostrar separado en el documento de SAP"
+                        checked={extra.send_separately}
+                        onChange={(e) => toggleLineSeparate(idx, e.target.checked)}
+                        className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                      />
+                    </td>
                   </tr>
                 );
               })}
