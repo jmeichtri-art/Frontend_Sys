@@ -84,10 +84,24 @@ hardcodear los campos.
       "data_type": "string",
       "description": "CostingCode / regla de distribución por defecto.",
       "default_value": null
+    },
+    {
+      "key": "local_currency",
+      "label": "Moneda local",
+      "data_type": "string",
+      "description": "Código ISO de la moneda local de la compañía (ej. PYG, ARS). Cotizar en otra moneda habilita el tipo de cambio. NULL cae al is_default de business.currencies.",
+      "default_value": null
     }
   ]
 }
 ```
+
+> **`local_currency` define cuál es la moneda local de la compañía**, y con eso, cuándo
+> una cotización está en moneda extranjera y necesita tipo de cambio. El listado de
+> monedas (**GET** `/api/v1/currencies?companyId=`) marca la que coincide con
+> `is_local: true` y la devuelve primero. Mientras el setting esté vacío se usa el
+> `is_default` de `business.currencies` como fallback, así que **conviene cargarlo por
+> compañía** para no depender de ese flag.
 
 > `data_type` es `"string"`, `"number"` o `"boolean"`. Se usa tanto para renderizar el
 > input correcto en el formulario como para la validación del backend al guardar.
