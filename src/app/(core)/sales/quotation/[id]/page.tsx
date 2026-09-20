@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, User, Calendar, Forklift, AlertCircle, Loader2, FileText, Pencil, Send, Trash2, Check } from 'lucide-react';
+import { ArrowLeft, User, Calendar, Forklift, AlertCircle, Loader2, FileText, Pencil, Send, Trash2, Check, Settings } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import {
@@ -17,6 +17,8 @@ import { formatDate } from '@/lib/utils';
 import { getQuotationById, deleteQuotation, syncQuotationToSap } from '@/services/quotation.service';
 import { QuotationApiItem } from '@/types/quotation';
 import { QuotationForm } from '@/components/quotation/QuotationForm';
+import { takeReconfigureDraft } from '@/lib/quotation/draft-storage';
+import { QuotationDraftLine } from '@/types/quotation';
 import { useAuth } from '@/lib/auth/AuthContext';
 
 export default function CotizacionDetailPage({ params }: { params: { id: string } }) {
@@ -30,6 +32,7 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState('');
   const [editMode,  setEditMode]  = useState(false);
+  const [reconfiguredLines, setReconfiguredLines] = useState<QuotationDraftLine[] | undefined>();
 
   const [syncing,   setSyncing]   = useState(false);
   const [syncError, setSyncError] = useState('');
@@ -41,8 +44,19 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
   useEffect(() => {
     const numId = Number(id);
     if (isNaN(numId)) { setError('ID de cotización inválido.'); setLoading(false); return; }
+
+    const pending = takeReconfigureDraft(numId);
+
     getQuotationById(numId)
-      .then(setQuotation)
+      .then((data) => {
+        setQuotation(data);
+        // Si el usuario viene de reconfigurar, se abre la edición con la configuración
+        // nueva para que revise precios y descuentos antes de guardar.
+        if (pending) {
+          setReconfiguredLines(pending.lines);
+          setEditMode(true);
+        }
+      })
       .catch((err) => setError(err.message ?? 'No se pudo cargar la cotización.'))
       .finally(() => setLoading(false));
   }, [id]);
@@ -100,8 +114,14 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
       <QuotationForm
         mode="edit"
         quotation={quotation}
-        onSaved={(updated) => { setQuotation(updated); setEditMode(false); }}
-        onCancel={() => setEditMode(false)}
+        reconfiguredLines={reconfiguredLines}
+        // El PUT devuelve solo la cabecera: hay que releer para recuperar las líneas
+        onSaved={(updated) => {
+          setEditMode(false);
+          setReconfiguredLines(undefined);
+          getQuotationById(updated.id).then(setQuotation).catch(() => setQuotation(updated));
+        }}
+        onCancel={() => { setEditMode(false); setReconfiguredLines(undefined); }}
       />
     );
   }
@@ -127,8 +147,10 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
                 <Badge variant={SYNC_STATUS_VARIANT_MAP[quotation.sync_status]} dot>
                   {SYNC_STATUS_LABEL_MAP[quotation.sync_status]}
                 </Badge>
-                {quotation.sync_status === 'synced' && quotation.docentry && (
-                  <span className="text-xs text-muted-foreground">SAP #{quotation.docentry}</span>
+                {quotation.sync_status === 'synced' && (quotation.docnum ?? quotation.docentry) && (
+                  <span className="text-xs text-muted-foreground" title={`DocEntry ${quotation.docentry}`}>
+                    SAP #{quotation.docnum ?? quotation.docentry}
+                  </span>
                 )}
               </div>
               <h1 className="text-2xl font-bold">{quotation.cardname}</h1>
@@ -171,6 +193,12 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
             <InfoRow label="Creación"      value={formatDate(quotation.created_at)} />
             <InfoRow label="Actualización" value={formatDate(quotation.updated_at)} />
             <InfoRow label="Válida hasta"  value={formatDate(quotation.valid_until)} />
+            {quotation.currency_code && (
+              <InfoRow label="Moneda" value={quotation.currency_code} />
+            )}
+            {quotation.doc_rate != null && (
+              <InfoRow label="Tipo de cambio" value={String(quotation.doc_rate)} />
+            )}
           </CardContent>
         </Card>
 
@@ -181,14 +209,27 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
               <CardTitle className="flex items-center gap-2 text-base">
                 <Forklift size={16} className="text-primary" /> Configuración del equipo
               </CardTitle>
-              <button
-                type="button"
-                onClick={() => setEditMode(true)}
-                title="Editar cotización"
-                className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-              >
-                <Pencil size={15} />
-              </button>
+              <div className="flex items-center gap-1">
+                {canSend && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    title="Rehacer la configuración en el asistente, con las mismas reglas de obligatorias y compatibilidad"
+                    onClick={() => router.push(`/sales/configurator?reconfigure=${quotation.id}`)}
+                  >
+                    <Settings size={14} /> Reconfigurar
+                  </Button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setEditMode(true)}
+                  title="Editar cotización"
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                >
+                  <Pencil size={15} />
+                </button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -212,7 +253,12 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
                       <span className="text-xs text-muted-foreground shrink-0 pt-0.5 w-44">{line.characteristic_name}</span>
                       <div className="flex-1 text-right">
                         <p className="text-sm font-medium">{line.option_description}</p>
-                        <p className="text-xs text-muted-foreground/60 font-mono">{line.mrkwrt}</p>
+                        <p className="text-xs text-muted-foreground/60 font-mono">
+                          {line.mrkwrt}
+                          {line.send_separately && (
+                            <span className="ml-2 font-sans uppercase tracking-wide">· Se muestra separado</span>
+                          )}
+                        </p>
                       </div>
                       {line.unit_price != null && (
                         <p className="text-sm font-semibold shrink-0 text-right">
@@ -228,7 +274,9 @@ export default function CotizacionDetailPage({ params }: { params: { id: string 
                       <span className="text-xs font-mono text-muted-foreground shrink-0 pt-0.5 w-44">{line.item_code}</span>
                       <div className="flex-1 text-right">
                         <p className="text-sm font-medium">{line.item_name}</p>
-                        <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">Ítem adicional</p>
+                        <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">
+                          Ítem adicional{line.send_separately ? ' · Se muestra separado' : ''}
+                        </p>
                       </div>
                       {line.unit_price != null && (
                         <p className="text-sm font-semibold shrink-0 text-right">

@@ -39,11 +39,13 @@ export default function CotizacionPage() {
   }, [selectedCompany]);
 
   const filtered = quotations.filter((q) => {
+    const term = search.toLowerCase();
     const matchSearch =
-      q.cardname.toLowerCase().includes(search.toLowerCase()) ||
-      q.cardcode.toLowerCase().includes(search.toLowerCase()) ||
-      q.machine_description.toLowerCase().includes(search.toLowerCase()) ||
-      q.matnrk.toLowerCase().includes(search.toLowerCase());
+      q.cardname.toLowerCase().includes(term) ||
+      q.cardcode.toLowerCase().includes(term) ||
+      q.machine_description.toLowerCase().includes(term) ||
+      q.matnrk.toLowerCase().includes(term) ||
+      String(q.docnum ?? '').includes(term);
     const matchStatus = statusFilter === 'Todas' || q.status === statusFilter;
     return matchSearch && matchStatus;
   });
@@ -88,7 +90,7 @@ export default function CotizacionPage() {
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
               <Input
                 className="pl-9"
-                placeholder="Buscar por cliente, código, equipo..."
+                placeholder="Buscar por N° SAP, cliente, código, equipo..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -138,6 +140,7 @@ export default function CotizacionPage() {
                 <thead>
                   <tr className="border-b border-border bg-secondary/50">
                     <th className="text-left px-6 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wider">#</th>
+                    <th className="text-left px-6 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wider">N° SAP</th>
                     <th className="text-left px-6 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wider">Cliente</th>
                     <th className="text-left px-6 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wider hidden md:table-cell">Equipo</th>
                     <th className="text-left px-6 py-3 font-semibold text-muted-foreground text-xs uppercase tracking-wider">Estado</th>
@@ -148,7 +151,7 @@ export default function CotizacionPage() {
                 <tbody className="divide-y divide-border">
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="text-center py-12 text-muted-foreground">
+                      <td colSpan={7} className="text-center py-12 text-muted-foreground">
                         No se encontraron cotizaciones
                       </td>
                     </tr>
@@ -156,6 +159,11 @@ export default function CotizacionPage() {
                     filtered.map((q) => (
                       <tr key={q.id} className="hover:bg-secondary/30 transition-colors">
                         <td className="px-6 py-4 font-mono font-semibold text-xs text-muted-foreground">{q.id}</td>
+                        <td className="px-6 py-4 font-mono text-xs">
+                          {q.docnum != null
+                            ? <span className="font-semibold">{q.docnum}</span>
+                            : <span className="text-muted-foreground">—</span>}
+                        </td>
                         <td className="px-6 py-4">
                           <div>
                             <p className="font-medium">{q.cardname}</p>
