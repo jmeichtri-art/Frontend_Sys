@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, ShoppingCart, Settings, FileText,
   ChevronLeft, ChevronRight, LogOut, Forklift, ChevronDown, ChevronUp, BookMarked,
-  Cog, Users, Building2, Tag, Package, FileUp, Boxes, Percent,
+  Cog, Users, Building2, Tag, Package, FileUp, Boxes, Percent, TrendingUp,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth/AuthContext';
 import { cn } from '@/lib/utils';
@@ -46,6 +46,7 @@ const NAV_ITEMS: NavItem[] = [
     children: [
       { label: 'Usuarios',   href: '/config/users',     icon: <Users size={18} />    },
       { label: 'Compañías',  href: '/config/companies', icon: <Building2 size={18} /> },
+      { label: 'Márgenes',   href: '/config/margins',   icon: <TrendingUp size={18} /> },
     ],
   },
 ];
