@@ -194,6 +194,7 @@ Incluye el detalle completo de las líneas de configuración.
 | `price_list_id`             | integer | No        | Lista de precios con la que se armó la cotización. Se guarda para preseleccionarla al reabrirla; los precios efectivos viven en cada línea |
 | `currency_id`               | integer | No        | Moneda del documento (`business.currencies`). Viaja como `DocCurrency` a SAP. `null` = usar la configurada para la compañía |
 | `doc_rate`                  | number  | No        | Tipo de cambio de esa moneda para esta cotización. Viaja como `DocRate`. `null` = usar el de la compañía / el vigente en SAP |
+| `parity_coefficient`        | number  | No        | Coeficiente con el que se convirtieron los precios de la moneda de la lista a la del documento. `null` = no hubo conversión |
 | `valid_until`               | string  | Sí        | Fecha de vencimiento (`YYYY-MM-DD`)                      |
 | `notes`                     | string  | No        | Observaciones libres                                     |
 | `lines`                     | array   | Sí        | Al menos una línea requerida                             |
@@ -230,6 +231,31 @@ que quede en el campo es el que se guarda y el que viaja a SAP.
 |--------|-------|-------|
 | 400    | `currency es requerido` | Falta el parámetro |
 | 404    | `La moneda X no está habilitada para esta compañía` | El código no está en `business.currencies` de esa compañía |
+
+### Conversión de moneda (coeficiente de paridad)
+
+Si la moneda del documento **no** es la de la lista de precios (por ejemplo, lista en EUR
+y cotización en USD), los precios se convierten:
+
+```
+precio_documento = precio_lista × parity_coefficient
+```
+
+La conversión la hace el backend en `POST /api/v1/price-lists/prices`, que acepta:
+
+| Campo | Descripción |
+|-------|-------------|
+| `currency_id` | Moneda en la que se quiere cotizar. Si coincide con la de la lista, no se convierte nada |
+| `parity_coefficient` | Coeficiente que pisa el default de la compañía (setting `currency_parity_coefficient`) |
+
+y devuelve `price_list_currency` y el `parity_coefficient` que efectivamente aplicó —
+útil para prellenar el campo, ya que el endpoint de settings es admin-only y un vendedor
+no puede leer el default por su cuenta.
+
+> Si hace falta convertir y no hay coeficiente cargado (ni override ni default de
+> compañía), responde `422` en vez de devolver los precios sin convertir.
+
+El coeficiente usado **se persiste en la cotización** (`parity_coefficient`).
 
 ### Tilde "Mostrar Separado" (`send_separately`)
 

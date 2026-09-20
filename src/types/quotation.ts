@@ -73,6 +73,7 @@ export interface UpdateQuotationLinesPayload {
   currency_id?: number | null;
   doc_rate?: number | null;
   margin_pct?: number | null;
+  parity_coefficient?: number | null;
   valid_until: string;
   customer_reference?: string;
   notes?: string;
@@ -93,6 +94,7 @@ export interface CreateQuotationPayload {
   currency_id?: number | null;
   doc_rate?: number | null;
   margin_pct?: number | null;
+  parity_coefficient?: number | null;
   valid_until: string;
   customer_reference?: string;
   notes?: string;
@@ -152,6 +154,7 @@ export interface QuotationApiItem {
   doc_rate: number | null;
   /** Margen aplicado. Solo llega si el usuario es admin; para un vendedor viene undefined. */
   margin_pct?: number | null;
+  parity_coefficient?: number | null;
   valid_until: string;
   status: 'draft' | 'sent' | 'approved' | 'rejected';
   sync_status: 'pending' | 'synced' | 'error';

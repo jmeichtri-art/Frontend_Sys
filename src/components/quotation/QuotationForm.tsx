@@ -185,6 +185,13 @@ export function QuotationForm(props: QuotationFormProps) {
   );
   // Moneda en la que están expresados los precios de la lista elegida
   const [priceListCurrency, setPriceListCurrency] = useState<string | null>(null);
+  // Coeficiente para pasar de la moneda de la lista a la del documento
+  const [parityCoefficient, setParityCoefficient] = useState(
+    isCreate ? '' : String((props.quotation as QuotationApiItem).parity_coefficient ?? ''),
+  );
+  const [parityError, setParityError] = useState('');
+  // Si la última respuesta vino convertida, para no pedir precios de más al volver atrás
+  const wasConverting = useRef(false);
   const [rateInfo,     setRateInfo]     = useState('');
   const [fetchingRate, setFetchingRate] = useState(false);
 
@@ -231,6 +238,10 @@ export function QuotationForm(props: QuotationFormProps) {
       ? priceListCurrency
       : null;
 
+  // Hay conversión cuando se cotiza en una moneda distinta a la de la lista de precios
+  const needsConversion = !!selectedCurrency && !!priceListCurrency && selectedCurrency.code !== priceListCurrency;
+  const conversionCurrencyId = () => (needsConversion ? Number(selectedCurrencyId) : null);
+
   // El tipo de cambio solo aplica si la moneda no es la local: se trae el vigente de SAP
   // como referencia y el vendedor lo puede pisar.
   async function handleCurrencyChange(value: string) {
@@ -238,6 +249,19 @@ export function QuotationForm(props: QuotationFormProps) {
     setRateInfo('');
 
     const currency = currencies.find((c) => String(c.id) === value);
+
+    // Cambiar la moneda cambia si hay que convertir los precios o no. Se vuelven a pedir
+    // solo si eso cambia, para no repetir la consulta cuando la moneda se alinea sola
+    // con la de la lista.
+    const willConvert = !!currency && !!priceListCurrency && currency.code !== priceListCurrency;
+    if (selectedPriceListId && priceListCurrency && (willConvert || wasConverting.current)) {
+      fetchPrices(Number(selectedPriceListId), {
+        marginOverride: currentMargin(),
+        convertToCurrencyId: willConvert ? Number(value) : null,
+        parity: willConvert && parityCoefficient !== '' ? Number(parityCoefficient) : null,
+      });
+    }
+
     if (!currency || currency.is_local) { setDocRate(''); return; }
 
     setFetchingRate(true);
@@ -259,21 +283,39 @@ export function QuotationForm(props: QuotationFormProps) {
 
   // Los precios vuelven con el margen ya aplicado por el backend. `margin_pct` solo llega
   // si el usuario es admin; un vendedor nunca lo recibe.
-  const fetchPrices = useCallback(async (priceListId: number, marginOverride?: number | null) => {
+  const fetchPrices = useCallback(async (
+    priceListId: number,
+    opts: { marginOverride?: number | null; convertToCurrencyId?: number | null; parity?: number | null } = {},
+  ) => {
     setFetchingPrices(true);
+    setParityError('');
     try {
       const ids    = lines.map((l) => l.option_id);
-      const result = await getPriceListPrices(priceListId, companyId, ids, marginOverride);
+      const result = await getPriceListPrices(priceListId, companyId, ids, {
+        marginOverride: opts.marginOverride,
+        currencyId: opts.convertToCurrencyId,
+        parityCoefficient: opts.parity,
+      });
       setPrices(new Map(result.prices.map((p) => [p.characteristic_option_id, p])));
       if (result.margin_pct !== undefined) setMarginPct(result.margin_pct == null ? '' : String(result.margin_pct));
-      setPriceListCurrency(result.prices.find((p) => p.currency_code)?.currency_code ?? null);
-    } catch { setPrices(new Map()); }
+      setPriceListCurrency(result.price_list_currency);
+      setParityCoefficient(result.parity_coefficient == null ? '' : String(result.parity_coefficient));
+      wasConverting.current = result.parity_coefficient != null;
+    } catch (err: unknown) {
+      // El backend corta si hace falta convertir y no hay coeficiente cargado
+      setPrices(new Map());
+      setParityError(err instanceof Error ? err.message : 'No se pudieron obtener los precios.');
+    }
     finally { setFetchingPrices(false); }
   }, [lines, companyId]);
 
+  const currentMargin = () => (marginPct === '' ? null : Number(marginPct));
+
   async function handlePriceListChange(value: string) {
     setSelectedPriceListId(value);
-    if (value) await fetchPrices(Number(value), marginPct === '' ? null : Number(marginPct));
+    // Primera consulta sin conversión: todavía no se sabe en qué moneda está la lista.
+    // Cuando se sepa, la moneda del documento se alinea sola con la de la lista.
+    if (value) await fetchPrices(Number(value), { marginOverride: currentMargin() });
     else setPrices(initialPrices);
   }
 
@@ -284,7 +326,24 @@ export function QuotationForm(props: QuotationFormProps) {
     if (!selectedPriceListId) return;
     const parsed = value === '' ? null : Number(value);
     if (parsed != null && (isNaN(parsed) || parsed < 0 || parsed >= 100)) return;
-    await fetchPrices(Number(selectedPriceListId), parsed);
+    await fetchPrices(Number(selectedPriceListId), {
+      marginOverride: parsed,
+      convertToCurrencyId: conversionCurrencyId(),
+      parity: parityCoefficient === '' ? null : Number(parityCoefficient),
+    });
+  }
+
+  // Cambiar el coeficiente recalcula los precios convertidos
+  async function handleParityChange(value: string) {
+    setParityCoefficient(value);
+    if (!needsConversion || !selectedPriceListId) return;
+    const parsed = value === '' ? null : Number(value);
+    if (parsed != null && (isNaN(parsed) || parsed <= 0)) return;
+    await fetchPrices(Number(selectedPriceListId), {
+      marginOverride: currentMargin(),
+      convertToCurrencyId: conversionCurrencyId(),
+      parity: parsed,
+    });
   }
 
   // Tras reconfigurar hay opciones nuevas sin precio guardado: se vuelven a pedir todos
@@ -293,7 +352,7 @@ export function QuotationForm(props: QuotationFormProps) {
   useEffect(() => {
     if (!reconfiguredLines?.length || !selectedPriceListId || reconfiguredPricesFetched.current) return;
     reconfiguredPricesFetched.current = true;
-    fetchPrices(Number(selectedPriceListId), marginPct === '' ? null : Number(marginPct));
+    fetchPrices(Number(selectedPriceListId), { marginOverride: currentMargin() });
   }, [reconfiguredLines, selectedPriceListId, marginPct, fetchPrices]);
 
   const hasPriceList = !!selectedPriceListId || (!isCreate && prices.size > 0);
@@ -465,6 +524,8 @@ export function QuotationForm(props: QuotationFormProps) {
     const docRateValue  = isForeignCurrency && docRate !== '' ? Number(docRate) : null;
     // Solo un admin edita el margen; para el resto viaja null y el backend lo ignora
     const marginValue   = isAdmin && marginPct !== '' ? Number(marginPct) : null;
+    // El coeficiente solo tiene sentido si hubo conversión de moneda
+    const parityValue   = needsConversion && parityCoefficient !== '' ? Number(parityCoefficient) : null;
     try {
       if (isCreate) {
         const result = await createQuotation({
@@ -477,6 +538,7 @@ export function QuotationForm(props: QuotationFormProps) {
           currency_id:        currencyId,
           doc_rate:           docRateValue,
           margin_pct:         marginValue,
+          parity_coefficient: parityValue,
           valid_until:        validUntil,
           customer_reference: customerReference.trim() || undefined,
           notes:              notes.trim() || undefined,
@@ -496,6 +558,7 @@ export function QuotationForm(props: QuotationFormProps) {
           currency_id:        currencyId,
           doc_rate:           docRateValue,
           margin_pct:         marginValue,
+          parity_coefficient: parityValue,
           valid_until:        validUntil,
           customer_reference: customerReference.trim() || undefined,
           notes:              notes.trim() || undefined,
@@ -657,6 +720,33 @@ export function QuotationForm(props: QuotationFormProps) {
                 </p>
               )}
             </div>
+            {needsConversion && (
+              <div className="space-y-1">
+                <Label htmlFor="parity" className="text-[11px]">
+                  Coeficiente {priceListCurrency} → {selectedCurrency?.code}
+                </Label>
+                <div className="relative">
+                  <input
+                    id="parity"
+                    type="number"
+                    min={0}
+                    step={0.0001}
+                    title={`Coeficiente para convertir de ${priceListCurrency} a ${selectedCurrency?.code}`}
+                    placeholder="0.0000"
+                    value={parityCoefficient}
+                    onChange={(e) => handleParityChange(e.target.value)}
+                    className="w-full h-7 px-2 text-xs rounded-md border border-input bg-transparent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring tabular-nums"
+                  />
+                  {fetchingPrices && (
+                    <Loader2 size={11} className="animate-spin text-muted-foreground absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Los precios de la lista están en {priceListCurrency} y se cotizan multiplicados por este valor.
+                </p>
+                {parityError && <p className="text-[10px] text-destructive">{parityError}</p>}
+              </div>
+            )}
             {isForeignCurrency && (
               <div className="space-y-1">
                 <Label htmlFor="docRate" className="text-[11px]">
