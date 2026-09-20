@@ -133,8 +133,8 @@ export function Sidebar() {
         </div>
         {!collapsed && (
           <div className="flex flex-col leading-tight">
-            <span className="text-white font-extrabold tracking-[0.08em] text-sm">HECATO</span>
-            <span className="text-white/40 text-[0.6rem] tracking-[0.15em] uppercase">Origins</span>
+            <span className="text-white font-extrabold tracking-[0.08em] text-sm">FORKBUILDER</span>
+            <span className="text-white/40 text-[0.6rem] tracking-[0.1em]">Powered by Hecato Origins</span>
           </div>
         )}
       </div>

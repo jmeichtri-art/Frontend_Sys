@@ -1,4 +1,6 @@
-# Hecato Origins — Frontend
+# ForkBuilder — Frontend
+
+> Powered by Hecato Origins
 
 Plataforma de ventas y configuración de autoelevadores. Permite a equipos comerciales armar presupuestos personalizados a partir de configuraciones de máquinas.
 

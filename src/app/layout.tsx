@@ -3,7 +3,7 @@ import './globals.css';
 import { AuthProvider } from '@/lib/auth/AuthContext';
 
 export const metadata: Metadata = {
-  title: 'Hecato Origins | Configurador de Autoelevadores',
+  title: 'ForkBuilder | Configurador de Autoelevadores',
   description: 'Sistema de configuración y cotización de autoelevadores taylor-made.',
 };
 

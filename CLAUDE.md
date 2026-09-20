@@ -1,8 +1,8 @@
-# CLAUDE.md — Contexto del proyecto: Hecato Origins Frontend
+# CLAUDE.md — Contexto del proyecto: ForkBuilder Frontend
 
 ## ¿Qué es este proyecto?
 
-**Hecato Origins** es una aplicación web para configurar y cotizar autoelevadores (forklifts). Permite al equipo de ventas:
+**ForkBuilder** (powered by Hecato Origins) es una aplicación web para configurar y cotizar autoelevadores (forklifts). Permite al equipo de ventas:
 
 - Configurar equipos paso a paso (características SAP: motores, mástiles, llantas, baterías, etc.)
 - Guardar configuraciones como templates reutilizables

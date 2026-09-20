@@ -48,8 +48,8 @@ export default function LoginPage() {
             <Forklift size={20} className="text-white" />
           </div>
           <div>
-            <div className="text-white font-extrabold text-xl tracking-[0.1em]">HECATO</div>
-            <div className="text-white/40 text-xs tracking-[0.2em] uppercase">Origins</div>
+            <div className="text-white font-extrabold text-xl tracking-[0.1em]">FORKBUILDER</div>
+            <div className="text-white/40 text-xs tracking-[0.12em]">Powered by Hecato Origins</div>
           </div>
         </div>
 
@@ -76,7 +76,7 @@ export default function LoginPage() {
 
         {/* Footer text */}
         <p className="text-white/25 text-xs relative z-10">
-          © 2025 Hecato Origins. Sistema interno.
+          © 2025 ForkBuilder · Powered by Hecato Origins. Sistema interno.
         </p>
       </div>
 
@@ -88,7 +88,10 @@ export default function LoginPage() {
             <div className="w-9 h-9 bg-primary rounded-lg flex items-center justify-center">
               <Forklift size={18} className="text-white" />
             </div>
-            <span className="font-extrabold text-xl tracking-widest">HECATO</span>
+            <div className="flex flex-col leading-tight">
+              <span className="font-extrabold text-xl tracking-widest">FORKBUILDER</span>
+              <span className="text-muted-foreground text-[0.6rem] tracking-[0.1em]">Powered by Hecato Origins</span>
+            </div>
           </div>
 
           <h2 className="text-2xl font-bold text-foreground mb-1">Bienvenido</h2>
