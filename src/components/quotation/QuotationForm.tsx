@@ -183,6 +183,8 @@ export function QuotationForm(props: QuotationFormProps) {
   const [docRate,      setDocRate]      = useState(
     isCreate ? '' : String((props.quotation as QuotationApiItem).doc_rate ?? ''),
   );
+  // Moneda en la que están expresados los precios de la lista elegida
+  const [priceListCurrency, setPriceListCurrency] = useState<string | null>(null);
   const [rateInfo,     setRateInfo]     = useState('');
   const [fetchingRate, setFetchingRate] = useState(false);
 
@@ -209,6 +211,25 @@ export function QuotationForm(props: QuotationFormProps) {
 
   const selectedCurrency  = currencies.find((c) => String(c.id) === selectedCurrencyId) ?? null;
   const isForeignCurrency = !!selectedCurrency && !selectedCurrency.is_local;
+
+  // Si la lista de precios ya viene en una moneda, el documento se pone en esa misma
+  // para que el vendedor no tenga que cambiarla a mano (y se trae su tipo de cambio).
+  // `selectedCurrencyId` queda fuera de las dependencias a propósito: esto se dispara al
+  // cambiar de lista, no cada vez que el usuario elige otra moneda.
+  useEffect(() => {
+    if (!priceListCurrency || !currencies.length) return;
+    const match = currencies.find((c) => c.code === priceListCurrency);
+    if (!match || String(match.id) === selectedCurrencyId) return;
+    handleCurrencyChange(String(match.id));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceListCurrency, currencies]);
+
+  // La lista está en una moneda que la compañía no tiene habilitada: no se puede alinear
+  // sola y quedaría el documento en una moneda y los precios en otra, sin aviso.
+  const unmatchedPriceListCurrency =
+    priceListCurrency && currencies.length && !currencies.some((c) => c.code === priceListCurrency)
+      ? priceListCurrency
+      : null;
 
   // El tipo de cambio solo aplica si la moneda no es la local: se trae el vigente de SAP
   // como referencia y el vendedor lo puede pisar.
@@ -245,6 +266,7 @@ export function QuotationForm(props: QuotationFormProps) {
       const result = await getPriceListPrices(priceListId, companyId, ids, marginOverride);
       setPrices(new Map(result.prices.map((p) => [p.characteristic_option_id, p])));
       if (result.margin_pct !== undefined) setMarginPct(result.margin_pct == null ? '' : String(result.margin_pct));
+      setPriceListCurrency(result.prices.find((p) => p.currency_code)?.currency_code ?? null);
     } catch { setPrices(new Map()); }
     finally { setFetchingPrices(false); }
   }, [lines, companyId]);
@@ -629,6 +651,11 @@ export function QuotationForm(props: QuotationFormProps) {
                   </option>
                 ))}
               </select>
+              {unmatchedPriceListCurrency && (
+                <p className="text-[10px] text-destructive">
+                  La lista de precios está en {unmatchedPriceListCurrency}, que no está habilitada para esta compañía.
+                </p>
+              )}
             </div>
             {isForeignCurrency && (
               <div className="space-y-1">
