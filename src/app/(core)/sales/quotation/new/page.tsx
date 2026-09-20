@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { QuotationDraft } from '@/types/quotation';
 import { QuotationForm } from '@/components/quotation/QuotationForm';
-
-const DRAFT_KEY = 'hecato_quotation_draft';
+import { QUOTATION_DRAFT_KEY as DRAFT_KEY } from '@/lib/quotation/draft-storage';
 
 export default function NewQuotationPage() {
   const router = useRouter();
